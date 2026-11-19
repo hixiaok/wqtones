@@ -172,7 +172,7 @@ static NSString *WQFirstAppGroup(void)
 static NSString *WQDescribeCode(int64_t code)
 {
     switch (code) {
-        case -1: return @"没有拿到 App Group（签名工具没给授权）";
+        case -1: return @"没有拿到 App Group";
         case -2: return @"找不到 containermanager 符号";
         case -3: return @"创建查询失败";
         case -4: return @"创建符号链接失败";
@@ -213,7 +213,7 @@ static NSString *WQDescribeCode(int64_t code)
     buttons.spacing = 8;
     buttons.translatesAutoresizingMaskIntoConstraints = NO;
 
-    NSArray *titles = @[ @"检测访问 / Test access", @"备份原件 / Backup", @"写入静音 / Silence", @"还原原件 / Restore" ];
+    NSArray *titles = @[ @"检测访问 / Test", @"备份原件 / Backup", @"写入静音 / Silence", @"还原原件 / Restore" ];
     NSArray *selectors = @[ @"actTest", @"actBackup", @"actSilence", @"actRestore" ];
     for (NSUInteger i = 0; i < titles.count; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -299,20 +299,30 @@ static NSString *WQDescribeCode(int64_t code)
     [self run:^{
         NSString *group = WQFirstAppGroup();
         if (!group) { [self logLine:@"✗ 没有 App Group，先重签"]; return; }
-        int64_t h = wq_escape(kWQTargetDir, group);
-        if (h < 0) {
-            [self logLine:@"✗ 拿不到访问令牌：%@ (%lld)", WQDescribeCode(h), (long long)h];
-            return;
+
+        NSMutableArray *targets = [NSMutableArray array];
+        NSURL *own = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:group];
+        if (own) [targets addObject:own.path];
+        [targets addObjectsFromArray:@[
+            @"/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache",
+            @"/var/containers/Shared/SystemGroup",
+            @"/var/containers/Data/System",
+            @"/var/mobile/Library/CallServices/Greetings/default",
+            @"/var/mobile/Library/CallServices",
+            @"/var/mobile/Library",
+            @"/var/mobile"
+        ]];
+
+        for (NSString *t in targets) {
+            int64_t h = wq_escape(t, group);
+            if (h >= 0) {
+                NSArray *items = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:t error:nil];
+                [self logLine:@"✓ %@  (授权成功, %lu 项) %@", t, (unsigned long)items.count, items ?: @""];
+                wq_release(h);
+            } else {
+                [self logLine:@"✗ %@  %@ (%lld)", t, WQDescribeCode(h), (long long)h];
+            }
         }
-        NSFileManager *fm = [NSFileManager defaultManager];
-        NSArray *items = [fm contentsOfDirectoryAtPath:kWQTargetDir error:nil];
-        [self logLine:@"✓ 令牌成功，目录内容: %@", items ?: @"(读取失败)"];
-        for (NSString *name in items) {
-            NSString *p = [kWQTargetDir stringByAppendingPathComponent:name];
-            NSDictionary *attr = [fm attributesOfItemAtPath:p error:nil];
-            [self logLine:@"   %@  %@ bytes", name, attr[NSFileSize]];
-        }
-        wq_release(h);
     }];
 }
 
