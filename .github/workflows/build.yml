@@ -1,0 +1,39 @@
+name: Build unsigned IPA
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          chmod +x build.sh
+          ./build.sh
+
+      - name: Show result
+        run: ls -l WQTones-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WQTones-unsigned-ipa
+          path: WQTones-unsigned.ipa
+          if-no-files-found: error
+
+      # Also publish it as a release asset so the IPA can be downloaded
+      # without an artifact login.
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: WQTones build ${{ github.run_number }}
+          body: Unsigned IPA built by GitHub Actions.
+          files: WQTones-unsigned.ipa
+          prerelease: true
