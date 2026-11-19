@@ -304,13 +304,10 @@ static NSString *WQDescribeCode(int64_t code)
         NSURL *own = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:group];
         if (own) [targets addObject:own.path];
         [targets addObjectsFromArray:@[
-            @"/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache",
-            @"/var/containers/Shared/SystemGroup",
-            @"/var/containers/Data/System",
+            @"/private/var/mobile/Library/CallServices/Greetings/default",
+            @"/var/mobile/Library/CallServices/Greetings/default/StartDisclosureWithTone.m4a",
             @"/var/mobile/Library/CallServices/Greetings/default",
-            @"/var/mobile/Library/CallServices",
-            @"/var/mobile/Library",
-            @"/var/mobile"
+            @"/var/containers/Data/System"
         ]];
 
         for (NSString *t in targets) {
@@ -322,6 +319,34 @@ static NSString *WQDescribeCode(int64_t code)
             } else {
                 [self logLine:@"✗ %@  %@ (%lld)", t, WQDescribeCode(h), (long long)h];
             }
+        }
+
+        // 在可访问的容器里找有没有 CallServices / Greetings 的副本
+        int64_t h = wq_escape(@"/var/containers/Data/System", group);
+        if (h >= 0) {
+            NSFileManager *fm = [NSFileManager defaultManager];
+            NSArray *ids = [fm contentsOfDirectoryAtPath:@"/var/containers/Data/System" error:nil];
+            [self logLine:@"扫描 %lu 个系统容器…", (unsigned long)ids.count];
+            for (NSString *cid in ids) {
+                NSString *base = [@"/var/containers/Data/System" stringByAppendingPathComponent:cid];
+                NSArray *l1 = [fm contentsOfDirectoryAtPath:base error:nil];
+                for (NSString *a in l1) {
+                    if ([a.lowercaseString containsString:@"call"]) {
+                        [self logLine:@"  ? %@/%@", base, a];
+                    }
+                    NSString *p2 = [base stringByAppendingPathComponent:a];
+                    NSArray *l2 = [fm contentsOfDirectoryAtPath:p2 error:nil];
+                    for (NSString *b in l2) {
+                        if ([b.lowercaseString containsString:@"call"] || [b.lowercaseString containsString:@"greeting"]) {
+                            [self logLine:@"  ★ %@/%@/%@", base, a, b];
+                        }
+                    }
+                }
+            }
+            wq_release(h);
+            [self logLine:@"扫描结束"];
+        } else {
+            [self logLine:@"无法扫描系统容器: %@", WQDescribeCode(h)];
         }
     }];
 }
